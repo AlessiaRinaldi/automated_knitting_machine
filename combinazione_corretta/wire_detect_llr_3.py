@@ -115,7 +115,7 @@ def main():
         outdir = args.outdir or args.dir
         base = os.path.splitext(os.path.basename(p))[0]
         cv2.imwrite(os.path.join(outdir, f"out_{base}.png"), vis)
-        print(f"[{'OK' if present else 'NO'}] {os.path.basename(p)}  LLR={llr:.3f} (pos={s_pos:.3f} neg={s_neg:.3f})")
+        print(f"[{'OK' if present else 'ERROR'}] {os.path.basename(p)}  LLR={llr:.3f} (pos={s_pos:.3f} neg={s_neg:.3f})")
 
 if __name__ == "__main__":
     main()
