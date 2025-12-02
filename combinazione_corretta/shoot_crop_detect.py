@@ -29,7 +29,7 @@ SAVE_EXT = "jpg"
 POS_DIR = "/home/aless/llr/pos"                     # pos directory
 NEG_DIR = "/home/aless/llr/neg"                     # neg directory
 ROI_MASK_PATH = "/home/aless/llr/mask_soft.png"     # mask ROI
-THR = -0.04                                         # threshold LLR (=-0.04 to avoid false negative)
+THR = -0.035                                        # threshold LLR (=-0.035 to avoid false negative)
 SAVE_DEBUG_VIS = True                               # if True, save img whit LLR in OUT_DIR
 
 # ==========================
