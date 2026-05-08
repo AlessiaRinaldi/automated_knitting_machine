@@ -3,7 +3,9 @@
 #
 # PER COMPILARE:
 # cd progetto
-# python wire_detect_llr.py --pos .\data\pos --neg .\data\neg --roi .\roi_mask.png --dir .\test --thr 0.0
+# python wire_detect_llr.py --pos .\data\pos --neg .\data\neg --roi .\roi_mask.png --dir .\test --thr -0.035
+
+# thr scelto = -0.035 perchè voglio ridurre al massimo FALSE POSITIVE a costo di aumentare FALSE NEGATIVE (meno pericolose)
 
 import os, glob, argparse
 import numpy as np
@@ -11,23 +13,23 @@ import cv2
 
 EPS = 1e-8
 
-
+#uguale a build_mean_diff_mask.py
 def preprocess(bgr):
-    # converte in scala di grigi se l'immagine è BGR
+    #converte in scala di grigi se l'immagine è BGR
     gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY) if bgr.ndim == 3 else bgr
 
-    # riduce rumore ad alta frequenza
+    #riduce rumore ad alta frequenza
     gray = cv2.GaussianBlur(gray, (3, 3), 0)
 
-    # stabilizza il contrasto su immagini piccole
+    # tabilizza il contrasto su immagini piccole
     clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(4, 4))
     gray = clahe.apply(gray)
 
     return gray
 
-
+#non serve, ma se in futuro dovesse servire, la uso
 def load_imgs(folder):
-    # predisposizione: non solo per .png
+    #predisposizione: non solo per .png
     paths = []
     for ext in ("*.png", "*.jpg", "*.jpeg", "*.bmp"):
         paths += glob.glob(os.path.join(folder, ext))
@@ -44,20 +46,8 @@ def load_imgs(folder):
 
     return (np.stack(imgs, 0) if imgs else None), paths
 
-
+#mask = 0 -> peso 0, pixel ignorato; mask = 255 -> peso 1, pixel molto importante; valori intermedi -> peso intermedio
 def normalize_weight_mask(mask, gamma=1.0):
-    """
-    Converte la maschera in pesi float tra 0 e 1.
-
-    mask = 0   -> peso 0, pixel ignorato
-    mask = 255 -> peso 1, pixel molto importante
-    valori intermedi -> peso intermedio
-
-    gamma:
-        gamma = 1.0 mantiene i pesi lineari
-        gamma > 1.0 rende più importanti solo le zone molto chiare
-        gamma < 1.0 rende più importanti anche le zone grigie
-    """
 
     m = mask.astype(np.float32)
 
@@ -72,51 +62,42 @@ def normalize_weight_mask(mask, gamma=1.0):
 
     return m
 
-
+#Normalized Cross-Correlation tra A e B, se mask è None: calcola la NCC classica su tutta l'immagine.
 def ncc(A, B, mask=None, min_roi_weight=10.0, mask_gamma=1.0):
-    """
-    Normalized Cross-Correlation tra A e B.
-
-    Se mask è None:
-        calcola la NCC classica su tutta l'immagine.
-
-    Se mask è presente:
-        calcola una NCC pesata, dove i valori della maschera indicano
-        quanto ogni pixel deve contribuire al risultato.
-    """
-
+    
     A = A.astype(np.float32)
     B = B.astype(np.float32)
 
     if A.shape != B.shape:
-        raise ValueError(f"A e B devono avere la stessa shape. Trovato {A.shape} e {B.shape}")
+        raise ValueError(f"A and B must have the same shape, actually {A.shape} and {B.shape}")
 
     if mask is not None:
         if mask.shape != A.shape:
-            raise ValueError(f"mask e immagini devono avere la stessa shape. Trovato {mask.shape} e {A.shape}")
+            raise ValueError(f"mask and img must have the same shape, actually {mask.shape} and {A.shape}")
 
         # maschera pesata tra 0 e 1
         m = normalize_weight_mask(mask, gamma=mask_gamma)
 
-        # somma dei pesi: equivalente "pesato" del numero di pixel nella ROI
+        #somma dei pesi: equivalente "pesato" del numero di pixel nella ROI
         wsum = m.sum()
 
-        # controllo per non avere ROI troppo piccole o praticamente vuote
+        #controllo per non avere ROI troppo piccole o praticamente vuote
+        #controlla se tenere
         if wsum < min_roi_weight:
             return 0.0
 
-        # media pesata solo nella ROI
+        #media pesata solo nella ROI
         muA = (m * A).sum() / wsum
         muB = (m * B).sum() / wsum
 
-        # rimuove la media
+        #rimuove la media
         A0 = A - muA
         B0 = B - muB
 
-        # numeratore pesato
+        #numeratore pesato
         num = (m * A0 * B0).sum()
 
-        # denominatore pesato
+        #denominatore pesato
         normA = np.sqrt((m * A0 * A0).sum())
         normB = np.sqrt((m * B0 * B0).sum())
         denom = normA * normB + EPS
@@ -124,7 +105,7 @@ def ncc(A, B, mask=None, min_roi_weight=10.0, mask_gamma=1.0):
         return float(num / denom)
 
     else:
-        # NCC classica senza maschera
+        #NCC classica senza maschera
         A0 = A - A.mean()
         B0 = B - B.mean()
 
@@ -147,24 +128,19 @@ def main():
     ap.add_argument(
         "--mask-gamma",
         type=float,
-        default=1.0,
-        help="Esponente applicato alla maschera pesata. 1.0 = lineare, >1 enfatizza zone chiare."
+        default=1.0
     )
 
     ap.add_argument(
         "--min-roi-weight",
         type=float,
-        default=10.0,
-        help="Somma minima dei pesi della ROI per considerare valido il calcolo NCC."
+        default=10.0
     )
 
     args = ap.parse_args()
 
-    # maschera in scala di grigi
-    # Ora i livelli di grigio sono importanti:
-    # 0 = ignora
-    # 255 = massimo peso
-    # valori intermedi = peso intermedio
+    #maschera in scala di grigi
+    # 0 = ignora; 255 = massimo peso; valori intermedi = peso intermedio
     roi = cv2.imread(args.roi, cv2.IMREAD_GRAYSCALE)
 
     if roi is None:
@@ -182,6 +158,7 @@ def main():
     proto_neg = np.median(neg_stack, axis=0).astype(np.uint8)
 
     # immagini di test
+    # per maggiore sicurezza
     paths = []
     for ext in ("*.png", "*.jpg", "*.jpeg", "*.bmp"):
         paths += glob.glob(os.path.join(args.dir, ext))
@@ -209,8 +186,7 @@ def main():
         H, W = g.shape[:2]
 
         # IMPORTANTE:
-        # con una maschera pesata uso INTER_LINEAR, non INTER_NEAREST.
-        # Così, se la maschera ha sfumature, le mantiene.
+        # con una maschera pesata uso INTER_LINEAR, non INTER_NEAREST, così se la maschera ha sfumature, le mantiene.
         roi_rs = cv2.resize(roi, (W, H), interpolation=cv2.INTER_LINEAR)
 
         pp = cv2.resize(proto_pos, (W, H), interpolation=cv2.INTER_AREA)
@@ -239,12 +215,11 @@ def main():
         # decisione finale
         present = llr >= args.thr
 
-        # visualizzazione debug
+        #visualizzazione debug
         vis = bgr.copy()
         color = (0, 255, 0) if present else (0, 0, 255)
 
-        # Per disegnare il contorno uso ancora una versione binaria della ROI.
-        # Questo serve solo per visualizzare la zona considerata.
+        # Per disegnare il contorno uso una versione binaria della ROI
         roi_bin = (roi_rs > 0).astype(np.uint8)
         cnts, _ = cv2.findContours(
             roi_bin,

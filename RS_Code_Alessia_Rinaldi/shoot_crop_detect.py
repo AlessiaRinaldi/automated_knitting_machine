@@ -35,16 +35,17 @@ THR = -0.035
 SAVE_DEBUG_VIS = True
 
 # ==========================
-# CONFIGURAZIONE MASCHERA PESATA
+# CONFIGURATION WEIGHTED MASK
 # ==========================
 EPS = 1e-8
 
-# 1.0 = pesi lineari: 0 nero, 0.5 grigio, 1 bianco
+# PREDISPOSIZIONE:
+# 1.0 = pesi lineari: 0 nero, 0.5 grigio, 1 bianco ->  0 = ignora; 255 = massimo peso; valori intermedi = peso intermedio  
 # >1.0 = enfatizza di più solo le zone molto chiare
 # <1.0 = dà più importanza anche alle zone grigie
 MASK_GAMMA = 1.0
 
-# Somma minima dei pesi per evitare ROI troppo piccole/vuote
+# Somma minima dei pesi per evitare ROI troppo piccole, valutare se tenere
 MIN_ROI_WEIGHT = 10.0
 
 
@@ -75,15 +76,8 @@ def roi_from_mode(W, H):
 
     return clamp_roi(x, y, w, h, W, H)
 
-
+# Legge immagine da disco, fa il crop in base alla ROI e, opzionalmente, salva il ritaglio in CROP_DIR
 def crop_image(img_path, save=True):
-    """
-    Legge immagine da disco, fa il crop in base alla ROI
-    e, opzionalmente, salva il ritaglio in CROP_DIR.
-
-    return:
-        crop_bgr, crop_path_oppure_None
-    """
 
     img = cv2.imread(img_path, cv2.IMREAD_COLOR)
 
@@ -115,6 +109,7 @@ def crop_image(img_path, save=True):
 # ==========================
 # UTILS LLR
 # ==========================
+# Come in build_mean_diff_mask.py
 def preprocess(bgr):
     # conversione in scala di grigi se immagine BGR
     gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY) if bgr.ndim == 3 else bgr
@@ -128,7 +123,7 @@ def preprocess(bgr):
 
     return gray
 
-
+# Predisposizione per futuro
 def load_imgs(folder):
     paths = []
 
@@ -148,21 +143,9 @@ def load_imgs(folder):
 
     return (np.stack(imgs, 0) if imgs else None), paths
 
-
+# mask 0 = peso 0 = ignora; mask 255 = peso 1 = massimo peso; valori intermedi = peso intermedio
 def normalize_weight_mask(mask, gamma=1.0):
-    """
-    Converte la maschera in pesi float tra 0 e 1.
-
-    mask = 0   -> peso 0, pixel ignorato
-    mask = 255 -> peso 1, pixel molto importante
-    valori intermedi -> pesi intermedi
-
-    gamma:
-        1.0 mantiene una pesatura lineare
-        >1.0 enfatizza maggiormente le zone chiare
-        <1.0 dà più peso anche alle zone grigie
-    """
-
+    
     m = mask.astype(np.float32)
 
     max_val = m.max()
@@ -177,51 +160,40 @@ def normalize_weight_mask(mask, gamma=1.0):
 
     return m
 
-
+# Normalized Cross-Correlation tra A e B, se mask è none calcola la NCC classica su tutta l'immagine
 def ncc(A, B, mask=None, min_roi_weight=10.0, mask_gamma=1.0):
-    """
-    Normalized Cross-Correlation tra A e B.
-
-    Se mask è None:
-        calcola la NCC classica su tutta l'immagine.
-
-    Se mask è presente:
-        calcola una NCC pesata, dove i livelli di grigio della maschera
-        indicano quanto ogni pixel deve contribuire al risultato.
-    """
-
+    
     A = A.astype(np.float32)
     B = B.astype(np.float32)
 
     if A.shape != B.shape:
-        raise ValueError(f"A e B devono avere la stessa shape. Trovato {A.shape} e {B.shape}")
+        raise ValueError(f"A and B must have the same shape, actually {A.shape} and {B.shape}")
 
     if mask is not None:
         if mask.shape != A.shape:
-            raise ValueError(f"mask e immagini devono avere la stessa shape. Trovato {mask.shape} e {A.shape}")
+            raise ValueError(f"mask and img must have the same shape, actually {mask.shape} and {A.shape}")
 
-        # Maschera pesata tra 0 e 1.
-        # Qui NON si usa più (mask > 0).
+        #maschera pesata tra 0 e 1
         m = normalize_weight_mask(mask, gamma=mask_gamma)
 
-        # Somma dei pesi: è l'equivalente pesato del numero di pixel validi.
+        #somma dei pesi: equivalente "pesato" del numero di pixel nella ROI
         wsum = m.sum()
 
         if wsum < min_roi_weight:
             return 0.0
 
-        # Media pesata nella ROI
+        #media pesata nella ROI
         muA = (m * A).sum() / wsum
         muB = (m * B).sum() / wsum
 
-        # Rimozione della media
+        #rimozione della media
         A0 = A - muA
         B0 = B - muB
 
-        # Numeratore pesato
+        #numeratore pesato
         num = (m * A0 * B0).sum()
 
-        # Denominatore pesato
+        #denominatore pesato
         normA = np.sqrt((m * A0 * A0).sum())
         normB = np.sqrt((m * B0 * B0).sum())
 
@@ -230,7 +202,7 @@ def ncc(A, B, mask=None, min_roi_weight=10.0, mask_gamma=1.0):
         return float(num / denom)
 
     else:
-        # NCC classica senza maschera
+        #NCC classica senza maschera
         A0 = A - A.mean()
         B0 = B - B.mean()
 
@@ -238,15 +210,9 @@ def ncc(A, B, mask=None, min_roi_weight=10.0, mask_gamma=1.0):
 
         return float((A0 * B0).sum() / denom)
 
-
+# CLASSIFICATORE: riceve crop, calcola LLR, stampa
 def classify_array(bgr, proto_pos, proto_neg, roi_mask, thr=0.10, debug_name=None):
-    """
-    Riceve un crop BGR, calcola LLR e stampa i risultati.
-
-    return:
-        present, llr, s_pos, s_neg
-    """
-
+    
     if bgr is None:
         print("[SKIP] null img")
         return None, None, None, None
@@ -255,11 +221,8 @@ def classify_array(bgr, proto_pos, proto_neg, roi_mask, thr=0.10, debug_name=Non
 
     H, W = g.shape[:2]
 
-    # Adatta ROI e prototipi alla risoluzione del crop.
-    #
     # IMPORTANTE:
-    # con una maschera soft/pesata uso INTER_LINEAR,
-    # così le sfumature della maschera vengono mantenute.
+    # con una maschera pesata uso INTER_LINEAR, non INTER_NEAREST, così se la maschera ha sfumature, le mantiene.
     roi_rs = cv2.resize(roi_mask, (W, H), interpolation=cv2.INTER_LINEAR)
 
     pp = cv2.resize(proto_pos, (W, H), interpolation=cv2.INTER_AREA)
@@ -282,7 +245,7 @@ def classify_array(bgr, proto_pos, proto_neg, roi_mask, thr=0.10, debug_name=Non
         mask_gamma=MASK_GAMMA
     )
 
-    # LLR semplificato
+    # LLR
     llr = s_pos - s_neg
 
     # Decisione finale
@@ -290,14 +253,13 @@ def classify_array(bgr, proto_pos, proto_neg, roi_mask, thr=0.10, debug_name=Non
 
     print(f"[{'OK' if present else 'NO'}] LLR={llr:.3f} (pos={s_pos:.3f} neg={s_neg:.3f})")
 
-    # Salva immagine debug con LLR
+    #visualizzazione debug
     if SAVE_DEBUG_VIS and debug_name is not None:
         vis = bgr.copy()
 
         color = (0, 255, 0) if present else (0, 0, 255)
 
-        # Visualizzazione opzionale: contorno della parte non nulla della maschera.
-        # Serve solo per debug. La NCC usa comunque la maschera pesata completa.
+        # Per disegnare il contorno uso una versione binaria della ROI
         roi_bin = (roi_rs > 0).astype(np.uint8)
 
         cnts, _ = cv2.findContours(
@@ -377,29 +339,24 @@ def main():
     ensure_dir(OUT_DIR)
 
     # --- Carica ROI per LLR ---
-    #
-    # Deve essere una maschera in scala di grigi:
-    # 0 nero   -> ignora
-    # 255 bianco -> massimo peso
-    # grigi intermedi -> peso intermedio
     roi_mask = cv2.imread(ROI_MASK_PATH, cv2.IMREAD_GRAYSCALE)
 
     if roi_mask is None:
-        raise FileNotFoundError(f"ROI mask non trovata: {ROI_MASK_PATH}")
+        raise FileNotFoundError(f"ROI mask non found: {ROI_MASK_PATH}")
 
     # --- Carica dataset training pos/neg e crea prototipi ---
     pos_stack, _ = load_imgs(POS_DIR)
     neg_stack, _ = load_imgs(NEG_DIR)
 
     if pos_stack is None or neg_stack is None:
-        raise RuntimeError("Metti almeno una immagine in POS_DIR e in NEG_DIR")
+        raise RuntimeError("you need at least1 img in  POS_DIR and in NEG_DIR")
 
     # Prototipi robusti tramite mediana
     proto_pos = np.median(pos_stack, axis=0).astype(np.uint8)
     proto_neg = np.median(neg_stack, axis=0).astype(np.uint8)
 
-    print("[OK] Prototipi LLR caricati.")
-    print(f"[OK] Maschera soft caricata: {ROI_MASK_PATH}")
+    print("[OK] LLR loaded.")
+    print(f"[OK] soft_mask loaded: {ROI_MASK_PATH}")
     print(f"[INFO] THR={THR}, MASK_GAMMA={MASK_GAMMA}, MIN_ROI_WEIGHT={MIN_ROI_WEIGHT}")
 
     # --- Inizializza camera ---
@@ -424,7 +381,7 @@ def main():
         roi_mask
     )
 
-    print("[OK] Pronto. Premi il microinterruttore per SCATTO + LLR (CTRL+C per uscire).")
+    print("[OK] Ready. Press microswitch (CTRL+C exit).")
 
     try:
         while True:
@@ -435,7 +392,7 @@ def main():
 
     finally:
         picam2.stop()
-        print("\n[OK] Uscita.")
+        print("\n[OK] Exit.")
 
 
 if __name__ == "__main__":
